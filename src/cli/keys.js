@@ -31,6 +31,9 @@ module.exports = ({ commandProcessor, root }) => {
 				boolean: true,
 				default: false,
 				description: 'Force overwriting of <filename> if it exists',
+			},
+			'device': {
+				description: 'Device ID of the target device',
 			}
 		},
 		handler: (args) => {
@@ -72,6 +75,9 @@ module.exports = ({ commandProcessor, root }) => {
 			'port': {
 				number: true,
 				description: 'Port number of the server to add to the key'
+			},
+			'device': {
+				description: 'Device ID of the target device',
 			}
 		}),
 		handler: (args) => {
@@ -81,7 +87,11 @@ module.exports = ({ commandProcessor, root }) => {
 	});
 
 	commandProcessor.createCommand(keys, 'address', 'Read server configured in device server public key', {
-		options: protocolOption,
+		options: Object.assign({}, protocolOption, {
+			'device': {
+				description: 'Device ID of the target device',
+			}	
+		}),
 		handler: (args) => {
 			const KeysCommand = require('../cmd/keys');
 			return new KeysCommand().readServerAddress(args);

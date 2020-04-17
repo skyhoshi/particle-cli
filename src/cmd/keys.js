@@ -160,14 +160,15 @@ module.exports = class KeysCommand {
 		});
 	}
 
-	saveKeyFromDevice(filename, { force }) {
+	saveKeyFromDevice(filename, { force, device }) {
 		filename = utilities.filenameNoExt(filename) + '.der';
-		return this._saveKeyFromDevice({ filename, force });
+		return this._saveKeyFromDevice({ filename, force, deviceId: device });
 	}
 
-	_saveKeyFromDevice({ filename, force }) {
+	_saveKeyFromDevice({ filename, force, deviceId }) {
 		const { tryDelete, filenameNoExt, deferredChildProcess } = utilities;
 		let protocol;
+		let targetDevice = {};
 
 		if (!force && fs.existsSync(filename)) {
 			throw new VError('This file already exists, please specify a different file, or use the --force flag.');
@@ -183,7 +184,10 @@ module.exports = class KeysCommand {
 				return this.dfu.isDfuUtilInstalled();
 			})
 			.then(() => {
-				return this.dfu.findCompatibleDFU();
+				return this.dfu.findCompatibleDFU({ deviceId })
+			})
+			.then((compatibleDevice) => {
+				targetDevice = compatibleDevice;
 			})
 			.then(() => {
 				return this.validateDeviceProtocol();
@@ -191,7 +195,7 @@ module.exports = class KeysCommand {
 			.then(_protocol => {
 				protocol = _protocol;
 				let segment = this._getPrivateKeySegmentName({ protocol });
-				return this.dfu.read(filename, segment, false);
+				return this.dfu.read(filename, segment, false, targetDevice);
 			})
 			.then(() => {
 				let pubPemFilename = filenameNoExt(filename) + '.pub.pem';
@@ -329,84 +333,108 @@ module.exports = class KeysCommand {
 		return addressBuf;
 	}
 
-	writeServerPublicKey(filename, { host, port, protocol } = {}) {
+	writeServerPublicKey(filename, { host, port, protocol, device } = {}) {
+		let targetDevice = {};
+
 		if (filename && !fs.existsSync(filename)) {
 			// TODO UsageError
 			throw new VError('Please specify a server key in DER format.');
 		}
 
-		return Promise.resolve().then(() => {
-			return this.dfu.isDfuUtilInstalled();
-		}).then(() => {
-			return this.dfu.findCompatibleDFU();
-		}).then(() => {
-			return this.validateDeviceProtocol({ protocol });
-		}).then(_protocol => {
-			protocol = _protocol;
-			return this._getDERPublicKey(filename, { protocol });
-		}).then(derFile => {
-			return this._formatPublicKey(derFile, host, port, { protocol });
-		}).then(bufferFile => {
-			let segment = this._getServerKeySegmentName({ protocol });
-			return this.dfu.write(bufferFile, segment, false);
-		}).then(() => {
-			console.log('Okay!  New keys in place, your device will not restart.');
-		}).catch(err => {
-			throw new VError(ensureError(err), 'Make sure your device is in DFU mode (blinking yellow), and is connected to your computer.');
-		});
+		return Promise.resolve()
+			.then(() => {
+				return this.dfu.isDfuUtilInstalled();
+			})
+			.then(() => {
+				return this.dfu.findCompatibleDFU({ deviceId: device })
+			})
+			.then((compatibleDevice) => {
+				targetDevice = compatibleDevice;
+			})
+			.then(() => {
+				return this.validateDeviceProtocol({ protocol });
+			})
+			.then(_protocol => {
+				protocol = _protocol;
+				return this._getDERPublicKey(filename, { protocol });
+			})
+			.then(derFile => {
+				return this._formatPublicKey(derFile, host, port, { protocol });
+			})
+			.then(bufferFile => {
+				let segment = this._getServerKeySegmentName({ protocol });
+				return this.dfu.write(bufferFile, segment, false, targetDevice);
+			})
+			.then(() => {
+				console.log('Okay!  New keys in place, your device will not restart.');
+			})
+			.catch(err => {
+				throw new VError(ensureError(err), 'Make sure your device is in DFU mode (blinking yellow), and is connected to your computer.');
+			});
 	}
 
-	readServerAddress({ protocol }) {
+	readServerAddress({ protocol, device }) {
 		let keyBuf, serverKeySeg;
+		let targetDevice = {};
 
-		return Promise.resolve().then(() => {
-			return this.dfu.isDfuUtilInstalled();
-		}).then(() => {
-			return this.dfu.findCompatibleDFU();
-		}).then(() => {
-			return this.validateDeviceProtocol({ protocol });
-		}).then(_protocol => {
-			protocol = _protocol;
-			serverKeySeg = this._getServerKeySegment({ protocol });
-		}).then(() => {
-			let segment = this._getServerKeySegmentName({ protocol });
-			return this.dfu.readBuffer(segment, false)
-				.then((buf) => {
-					keyBuf = buf;
-				});
-		}).then(() => {
-			let offset = serverKeySeg.addressOffset || 384;
-			let portOffset = serverKeySeg.portOffset || 450;
-			let type = keyBuf[offset];
-			let len = keyBuf[offset+1];
-			let data = keyBuf.slice(offset + 2, offset + 2 + len);
+		return Promise.resolve()
+			.then(() => {
+				return this.dfu.isDfuUtilInstalled();
+			})
+			.then(() => {
+				return this.dfu.findCompatibleDFU({ deviceId: device })
+			})
+			.then((compatibleDevice) => {
+				targetDevice = compatibleDevice;
+			})
+			.then(() => {
+				return this.validateDeviceProtocol({ protocol });
+			})
+			.then(_protocol => {
+				protocol = _protocol;
+				serverKeySeg = this._getServerKeySegment({ protocol });
+			})
+			.then(() => {
+				let segment = this._getServerKeySegmentName({ protocol });
+				return this.dfu.readBuffer(segment, false, targetDevice)
+					.then((buf) => {
+						keyBuf = buf;
+					});
+			})
+			.then(() => {
+				let offset = serverKeySeg.addressOffset || 384;
+				let portOffset = serverKeySeg.portOffset || 450;
+				let type = keyBuf[offset];
+				let len = keyBuf[offset+1];
+				let data = keyBuf.slice(offset + 2, offset + 2 + len);
 
-			let port = keyBuf[portOffset] << 8 | keyBuf[portOffset+1];
-			if (port === 0xFFFF) {
-				port = protocol === 'tcp' ? 5683 : 5684;
-			}
-
-			let host = protocol === 'tcp' ? 'device.spark.io' : 'udp.particle.io';
-			if (len > 0) {
-				if (type === 0) {
-					host = Array.prototype.slice.call(data).join('.');
-				} else if (type === 1) {
-					host = data.toString('utf8');
+				let port = keyBuf[portOffset] << 8 | keyBuf[portOffset+1];
+				if (port === 0xFFFF) {
+					port = protocol === 'tcp' ? 5683 : 5684;
 				}
-			}
 
-			let result = {
-				hostname: host,
-				port: port,
-				protocol: protocol,
-				slashes: true
-			};
-			console.log();
-			console.log(url.format(result));
-			return result;
-		}).catch(err => {
-			throw new VError(ensureError(err), 'Make sure your device is in DFU mode (blinking yellow), and is connected to your computer.');
-		});
+				let host = protocol === 'tcp' ? 'device.spark.io' : 'udp.particle.io';
+				if (len > 0) {
+					if (type === 0) {
+						host = Array.prototype.slice.call(data).join('.');
+					} else if (type === 1) {
+						host = data.toString('utf8');
+					}
+				}
+
+				let result = {
+					hostname: host,
+					port: port,
+					protocol: protocol,
+					slashes: true
+				};
+				console.log();
+				console.log(url.format(result));
+				return result;
+			})
+			.catch(err => {
+				throw new VError(ensureError(err), 'Make sure your device is in DFU mode (blinking yellow), and is connected to your computer.');
+			});
 	}
 
 	/**

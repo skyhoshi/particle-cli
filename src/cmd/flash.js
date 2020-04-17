@@ -81,8 +81,9 @@ module.exports = class FlashCommand {
 		let targetDevice = {};
 		return Promise.resolve()
 			.then(() => dfu.isDfuUtilInstalled())
-			.then(async () => {
-				targetDevice = await dfu.findCompatibleDFU({ deviceId: device });
+			.then(() => dfu.findCompatibleDFU({ deviceId: device }))
+			.then((compatibleDevice) => {
+				targetDevice = compatibleDevice;
 			})
 			.then(() => {
 				//only match against knownApp if file is not found
